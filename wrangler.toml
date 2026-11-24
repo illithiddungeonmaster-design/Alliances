@@ -1,9 +1,7 @@
 name = "alliances"
-compatibility_date = "2025-01-01"
 pages_build_output_dir = "./public"
+compatibility_date = "2024-01-01"
 
-# Create the database with:  npx wrangler d1 create alliances
-# then paste the database_id it prints here.
 [[d1_databases]]
 binding = "DB"
 database_name = "alliances"

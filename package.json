@@ -1,0 +1,17 @@
+{
+  "name": "alliances",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Alliances: a turn-based map game with hidden information, for Cloudflare Pages.",
+  "scripts": {
+    "db:local": "wrangler d1 execute alliances --local --file=schema.sql",
+    "dev": "wrangler pages dev public",
+    "db:remote": "wrangler d1 execute alliances --remote --file=schema.sql",
+    "deploy": "wrangler pages deploy public --project-name=alliances"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "license": "MIT"
+}

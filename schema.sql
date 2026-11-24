@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS lobbies (
+  code TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  updated INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lobbies_updated ON lobbies(updated);
+CREATE TABLE IF NOT EXISTS limits (
+  k TEXT PRIMARY KEY,
+  n INTEGER NOT NULL,
+  exp INTEGER NOT NULL
+);

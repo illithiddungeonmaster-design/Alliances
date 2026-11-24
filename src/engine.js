@@ -1,5 +1,18 @@
 /* Alliances game rules. Pure functions, no I/O, safe for the Workers runtime. */
-export const SIZE = 25, AP_MIN = 20 * 60, WIN_END = 22 * 60 + 15, LOGMAX = 400;
+export const LOGMAX = 400;
+
+/* ---------- game settings: change the numbers here ----------
+ * Every lobby stores the settings it was created with, so editing DEFAULT_CFG only affects lobbies created (or reset)
+ * after you deploy. Lobbies created by an earlier version have no stored settings and keep LEGACY_CFG for their whole life,
+ * which is what makes updating a live site safe: running games never change their rules mid-game.
+ *   size    map is size x size squares
+ *   apAt    minute of the day (game time zone) when every country gets +1 AP; 18 * 60 = 6:00 pm
+ *   winEnd  minute of the day when the action window closes (it opens at apAt)
+ *   loot    true: a collapsed country's AP pass to the country that delivered the final sanction; false: they are lost
+ */
+export const DEFAULT_CFG = { size: 20, apAt: 18 * 60, winEnd: 20 * 60 + 15, loot: false };
+export const LEGACY_CFG = { size: 25, apAt: 20 * 60, winEnd: 22 * 60 + 15, loot: true };
+export const cfgOf = (L) => L.cfg || LEGACY_CFG;
 export const START_STABILITY = 3, START_REACH = 2, EXTEND_COST = 2;
 export const DEFAULT_TZ = 'America/Chicago';
 const ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -34,8 +47,8 @@ function parts(ms, tz) {
 }
 export const dayIdx = (ms, tz) => { const p = parts(ms, tz); return Math.floor(Date.UTC(p.year, p.month - 1, p.day) / 864e5); };
 export const minsOf = (ms, tz) => { const p = parts(ms, tz); return p.hour * 60 + p.minute + p.second / 60; };
-export const grantDay = (ms, tz) => dayIdx(ms, tz) - (minsOf(ms, tz) < AP_MIN ? 1 : 0);
-export const windowOpen = (ms, tz) => { const m = minsOf(ms, tz); return m >= AP_MIN && m < WIN_END; };
+export const grantDay = (ms, tz, apAt) => dayIdx(ms, tz) - (minsOf(ms, tz) < apAt ? 1 : 0);
+export const windowOpen = (ms, tz, cfg) => { const m = minsOf(ms, tz); return m >= cfg.apAt && m < cfg.winEnd; };
 export function wallToEpoch(day, mins, tz) {
   const base = day * 864e5 + mins * 6e4; let t = base;
   for (let i = 0; i < 3; i++) { const p = parts(t, tz); t += base - Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second); }
@@ -45,7 +58,7 @@ export const validTz = (tz) => { try { new Intl.DateTimeFormat('en-US', { timeZo
 
 /* ---------- game state ---------- */
 export function newLobby(code, mh, tz, t) {
-  const L = { code, mh, phase: 'lobby', tz, players: {}, jury: {}, log: [], seq: 0, lastGrant: 0, winner: null, version: 1, created: t, updated: t };
+  const L = { code, mh, cfg: Object.assign({}, DEFAULT_CFG), phase: 'lobby', tz, players: {}, jury: {}, log: [], seq: 0, lastGrant: 0, winner: null, version: 1, created: t, updated: t };
   push(L, t, { k: 'open' }); return L;
 }
 function push(L, t, e) { L.seq += 1; e.id = L.seq; e.t = t; L.log.push(e); if (L.log.length > LOGMAX) L.log.splice(0, L.log.length - LOGMAX); }
@@ -57,9 +70,9 @@ export const findMine = (L, h) => (h ? Object.keys(L.players).find((c) => L.play
 /* Daily 8 pm grants are applied lazily whenever the lobby is touched. Returns true if anything changed. */
 export function applyGrants(L, t) {
   if (L.phase !== 'running') return false;
-  const cur = grantDay(t, L.tz); if (cur <= L.lastGrant) return false;
+  const cfg = cfgOf(L), cur = grantDay(t, L.tz, cfg.apAt); if (cur <= L.lastGrant) return false;
   for (let d = L.lastGrant + 1; d <= cur; d++) {
-    const when = wallToEpoch(d, AP_MIN, L.tz), tally = {}; let best = 0, winners = [];
+    const when = wallToEpoch(d, cfg.apAt, L.tz), tally = {}; let best = 0, winners = [];
     for (const v of Object.keys(L.jury)) { const tg = L.jury[v]; if (L.players[tg] && L.players[tg].alive) tally[tg] = (tally[tg] || 0) + 1; }
     for (const c of Object.keys(tally)) { if (tally[c] > best) { best = tally[c]; winners = [c]; } else if (tally[c] === best) winners.push(c); }
     for (const c of alives(L)) L.players[c].ap += 1;
@@ -87,30 +100,30 @@ export function start(L, t, tz) {
   const ids = Object.keys(L.players);
   if (ids.length < 2) return { err: 'At least 2 countries must join before the game can start.' };
   if (tz) { if (!validTz(tz)) return { err: 'Unknown time zone.' }; L.tz = tz; }
-  const cells = []; for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) cells.push([x, y]);
+  const cfg = cfgOf(L), cells = []; for (let y = 0; y < cfg.size; y++) for (let x = 0; x < cfg.size; x++) cells.push([x, y]);
   for (let i = cells.length - 1; i > 0; i--) { const j = randInt(i + 1); [cells[i], cells[j]] = [cells[j], cells[i]]; }
   ids.forEach((c, i) => { Object.assign(L.players[c], { x: cells[i][0], y: cells[i][1], lives: START_STABILITY, ap: 1, reach: START_REACH, alive: true }); });
-  L.phase = 'running'; L.lastGrant = grantDay(t, L.tz); L.jury = {};
+  L.phase = 'running'; L.lastGrant = grantDay(t, L.tz, cfg.apAt); L.jury = {};
   push(L, t, { k: 'start', n: ids.length }); return { ok: 'The game has started.' };
 }
 export function perform(L, cc, a, t) {
-  const p = cc && L.players[cc];
+  const p = cc && L.players[cc], cfg = cfgOf(L);
   if (a.t === 'vote') {
     if (L.phase !== 'running') return { err: 'The game is not running.' };
     if (!p || p.alive) return { err: 'Only fallen countries sit on the council.' };
     const tg = L.players[a.cc]; if (!tg || !tg.alive) return { err: 'Pick a country that is still in play.' };
-    L.jury[cc] = a.cc; return { ok: 'Vote recorded. You can change it until 8:00 pm.' };
+    L.jury[cc] = a.cc; return { ok: 'Vote recorded. You can change it until the next daily points arrive.' };
   }
   if (L.phase !== 'running') return { err: 'The game is not running.' };
   if (!p || !p.alive) return { err: 'You are not in play.' };
-  if (!windowOpen(t, L.tz)) return { err: 'The action window is closed right now.' };
+  if (!windowOpen(t, L.tz, cfg)) return { err: 'The action window is closed right now.' };
   const cost = a.t === 'extend' ? EXTEND_COST : 1;
   if (p.ap < cost) return { err: cost > 1 ? 'Extending your reach costs ' + cost + ' AP and you have ' + p.ap + '.' : 'You have no action points.' };
   if (a.t === 'move') {
     const dx = +a.dx, dy = +a.dy;
     if (!Number.isInteger(dx) || !Number.isInteger(dy) || !(dx || dy) || Math.abs(dx) > 1 || Math.abs(dy) > 1) return { err: 'A country moves one square at a time.' };
     const nx = p.x + dx, ny = p.y + dy;
-    if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) return { err: 'That is off the edge of the map.' };
+    if (nx < 0 || ny < 0 || nx >= cfg.size || ny >= cfg.size) return { err: 'That is off the edge of the map.' };
     if (occupied(L, nx, ny)) return { err: 'That square is occupied.' };
     const fx = p.x, fy = p.y; p.x = nx; p.y = ny; p.ap -= 1;
     push(L, t, { k: 'move', a: cc, fx, fy, x: nx, y: ny }); return { ok: 'Moved to ' + coord(nx, ny) + '.' };
@@ -129,7 +142,7 @@ export function perform(L, cc, a, t) {
       push(L, t, { k: 'hit', to: a.cc, a: cc, left: v.lives }); push(L, t, { k: 'shot', to: cc, b: a.cc });
       return { ok: 'Your sanction reached ' + cname(a.cc) + '.' };
     }
-    const loot = v.ap; v.alive = false; v.lives = 0; v.ap = 0; p.ap += loot;
+    const loot = cfg.loot ? v.ap : 0; v.alive = false; v.lives = 0; v.ap = 0; p.ap += loot;
     push(L, t, { k: 'kill', a: cc, b: a.cc, x: v.x, y: v.y });
     if (loot > 0) push(L, t, { k: 'loot', to: cc, b: a.cc, n: loot });
     const left = alives(L);
@@ -142,7 +155,7 @@ export function perform(L, cc, a, t) {
 
 /* ---------- what each viewer may see (the fog of war) ---------- */
 export function viewFor(L, au, wantHost, t) {
-  const v = { code: L.code, phase: L.phase, tz: L.tz, version: L.version, now: t, winner: L.winner, players: {}, me: au.cc || null, isMaster: !!au.master, codes: { player: au.pState, master: au.mState }, log: [], mine: null, myVote: null };
+  const v = { code: L.code, cfg: cfgOf(L), phase: L.phase, tz: L.tz, version: L.version, now: t, winner: L.winner, players: {}, me: au.cc || null, isMaster: !!au.master, codes: { player: au.pState, master: au.mState }, log: [], mine: null, myVote: null };
   for (const c of Object.keys(L.players)) {
     const p = L.players[c]; v.players[c] = { alive: p.alive };
     if (p.x != null) { v.players[c].x = p.x; v.players[c].y = p.y; }

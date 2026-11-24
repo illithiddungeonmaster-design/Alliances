@@ -50,6 +50,7 @@ async function authOf(L, request) {
 
 async function route(request, env, now, send) {
   const url = new URL(request.url), segs = url.pathname.split('/').filter(Boolean);
+  if (segs[0] === 'api' && segs[1] === 'config' && segs.length === 2 && request.method === 'GET') return send(200, { cfg: E.DEFAULT_CFG }, { 'Cache-Control': 'public, max-age=300' });
   if (segs[0] !== 'api' || segs[1] !== 'lobbies' || segs.length > 4) return send(404, { error: 'Not found' });
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
   let t = now();

@@ -1,7 +1,11 @@
 (function(){
 'use strict';
 /* ---------- constants ---------- */
-var SIZE=25, AP_MIN=20*60, WIN_END=22*60+15, START_STABILITY=3, EXTEND_COST=2;
+/* Game settings. These start as the defaults for new lobbies (fetched from /api/config) and are replaced by the
+   lobby's own settings as soon as a lobby is open, so older lobbies keep the rules they were created with. */
+var SIZE=20, AP_MIN=18*60, WIN_END=20*60+15, LOOT=false, START_STABILITY=3, EXTEND_COST=2;
+function setCfg(c){SIZE=c.size;AP_MIN=c.apAt;WIN_END=c.winEnd;LOOT=!!c.loot}
+function fmtClock(m){var h=Math.floor(m/60),mm=m%60;return ((h+11)%12+1)+':'+String(mm).padStart(2,'0')+' '+(h<12?'am':'pm')}
 var TZS=[['America/Chicago','Central US (Chicago)'],['America/New_York','Eastern US (New York)'],['America/Denver','Mountain US (Denver)'],['America/Los_Angeles','Pacific US (Los Angeles)'],['UTC','UTC'],['Europe/London','United Kingdom (London)'],['Europe/Berlin','Central Europe (Berlin)'],['Asia/Kolkata','India (Kolkata)'],['Asia/Tokyo','Japan (Tokyo)'],['Australia/Sydney','Australia (Sydney)']];
 var DEFAULT_TZ='America/Chicago';
 var ALPHA='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -73,6 +77,7 @@ async function api(method,path,body){
 }
 function apply(v){
   version=v.version;
+  if(v.cfg)setCfg(v.cfg);
   var s={code:v.code,phase:v.phase,tz:v.tz,winner:v.winner,players:{},jury:{},log:v.log,me:v.me,isMaster:v.isMaster,host:v.host||null};
   Object.keys(v.players).forEach(function(c){s.players[c]=Object.assign({},v.players[c])});
   if(v.me&&v.mine&&s.players[v.me])Object.assign(s.players[v.me],v.mine);
@@ -85,7 +90,7 @@ function apply(v){
   }
 }
 /* Polling is the main request cost on Cloudflare's free plan (100,000 Functions requests per day),
-   so it slows right down whenever nothing can change: orders only happen during the 8:00 to 10:15 pm window. */
+   so it slows right down whenever nothing can change: orders only happen during the daily action window. */
 function pollDelay(){
   var base;
   if(offline)base=10000;
@@ -169,7 +174,7 @@ function statusHTML(){
   var s1=wallToEpoch(d,AP_MIN,st.tz),s2=wallToEpoch(d,WIN_END,st.tz);
   var local=timeIn(s1,undefined)!==timeIn(s1,st.tz)?' Your clock: '+timeIn(s1)+' to '+timeIn(s2)+'.':'';
   if(st.phase==='running')h+='<div class="pill '+(w.open?'open':'closed')+'"><span class="dot"></span><b>'+(w.open?'Action window open':'Action window closed')+'</b><span class="mono" data-bind="winclock">'+(w.open?'closes in '+hms(w.closeAt-t):'opens in '+hms(w.opensAt-t))+'</span></div>';
-  h+='<div class="pill"><small>+1 AP daily at 8:00 pm '+ab+'. Action window 8:00 to 10:15 pm '+ab+'.'+esc(local)+'</small></div>';
+  h+='<div class="pill"><small>+1 AP daily at '+fmtClock(AP_MIN)+' '+ab+'. Action window '+fmtClock(AP_MIN)+' to '+fmtClock(WIN_END)+' '+ab+'.'+esc(local)+'</small></div>';
   return h;
 }
 function tickStatus(){
@@ -202,7 +207,7 @@ function boardHTML(){
     }
   }
   var h='<div class="panel-head"><h2>Map</h2><div class="seg" role="group" aria-label="Map size"><button data-act="zoom" data-v="0" aria-pressed="'+(!zoom)+'">Fit</button><button data-act="zoom" data-v="1" aria-pressed="'+zoom+'">Large</button></div></div>';
-  h+='<div class="boardscroll'+(zoom?' zoom':'')+'"><div class="board" role="group" aria-label="25 by 25 map, columns A to Y, rows 1 to 25">'+g+'</div></div>';
+  h+='<div class="boardscroll'+(zoom?' zoom':'')+'"><div class="board" role="group" aria-label="'+SIZE+' by '+SIZE+' map, columns A to '+colL(SIZE-1)+', rows 1 to '+SIZE+'">'+g+'</div></div>';
   h+='<div class="legend">';
   if(inPlay)h+='<span><i class="key me"></i>You</span><span><i class="key rng"></i>Your reach</span><span><i class="key hot"></i>Country in your reach</span>'+(canMove?'<span><i class="key mv"></i>Click to move</span>':'');
   h+='<span>× Fallen country</span></div>';
@@ -230,15 +235,15 @@ function ordersHTML(me){
   if(st.phase==='over')return '<div class="empty">The game is over.</div>';
   if(!p.alive){
     var vote=st.jury[me];
-    h+='<div><h3>Council vote</h3><p class="private-note">Each day the country with the most council votes receives +1 AP at 8:00 pm. A tie gives nobody the point. Votes reset daily and nobody sees how you voted.</p></div>';
+    h+='<div><h3>Council vote</h3><p class="private-note">Each day the country with the most council votes receives +1 AP at '+fmtClock(AP_MIN)+'. A tie gives nobody the point. Votes reset daily and nobody sees how you voted.</p></div>';
     if(note)h+='<div class="notice '+(note.ok?'good':'bad')+'" role="status">'+esc(note.text)+'</div>';
     h+='<ul class="list">';
     alives().forEach(function(c){h+='<li><span class="chip"><i class="flag f-'+c+'"></i>'+esc(cname(c))+'</span><button class="btn small'+(vote===c?' primary':'')+'" data-act="vote" data-cc="'+c+'" data-fid="vote-'+c+'" '+(busy?'disabled':'')+'>'+(vote===c?'Your vote':'Vote')+'</button></li>'});
     return h+'</ul></div>';
   }
   var can=w.open&&p.ap>=1&&!busy;
-  if(!w.open)h+='<div class="notice warn">The action window is closed. The next one opens at 8:00 pm '+tzAbbr(st.tz,t)+'. Your action points are safe until then.</div>';
-  else if(p.ap<1)h+='<div class="notice warn">You are out of action points. The next one arrives at 8:00 pm tomorrow.</div>';
+  if(!w.open)h+='<div class="notice warn">The action window is closed. The next one opens at '+fmtClock(AP_MIN)+' '+tzAbbr(st.tz,t)+'. Your action points are safe until then.</div>';
+  else if(p.ap<1)h+='<div class="notice warn">You are out of action points. The next one arrives at '+fmtClock(AP_MIN)+' tomorrow.</div>';
   else h+='<div class="notice good">The action window is open. Moving, sanctioning and sending aid cost 1 AP. Extending your reach costs '+EXTEND_COST+' AP.</div>';
   if(note)h+='<div class="notice '+(note.ok?'good':'bad')+'" role="status">'+esc(note.text)+'</div>';
   var dirs=[[-1,-1,'↖','north-west'],[0,-1,'↑','north'],[1,-1,'↗','north-east'],[-1,0,'←','west'],[0,0],[1,0,'→','east'],[-1,1,'↙','south-west'],[0,1,'↓','south'],[1,1,'↘','south-east']];
@@ -279,7 +284,7 @@ function lobbyHTML(me){
   h+='</div>';
   if(st.isMaster){
     var tz=lobbyTz||st.tz,opts=TZS.slice();if(!opts.some(function(o){return o[0]===tz}))opts.unshift([tz,tz]);
-    h+='<div class="panel" style="background:var(--surface-2)"><h3>Host controls</h3><div class="stack" style="margin-top:8px"><label for="tzSel" style="font-size:14px">Game time zone. Action points arrive at 8:00 pm here.</label><select id="tzSel" data-fid="tz">'+opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===tz?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'+
+    h+='<div class="panel" style="background:var(--surface-2)"><h3>Host controls</h3><div class="stack" style="margin-top:8px"><label for="tzSel" style="font-size:14px">Game time zone. Action points arrive at '+fmtClock(AP_MIN)+' here.</label><select id="tzSel" data-fid="tz">'+opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===tz?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'+
       '<div class="row"><button class="btn primary" data-act="start" data-fid="start" '+(ids.length<2||busy?'disabled':'')+'>Start game</button>'+(ids.length<2?'<span class="private-note">Needs at least 2 countries.</span>':'')+'</div></div></div>';
   }else h+='<p class="private-note">Waiting for the host to start the game.</p>';
   return h+'</div>';
@@ -342,16 +347,16 @@ function rulesHTML(){
   return '<div class="rules">'+
   '<h3>Goal</h3><p>Be the last country standing. Every player is assigned a random country, and that flag is your identity for the whole game.</p>'+
   '<h3>Codes</h3><ul><li><b>Lobby code</b> (5 characters): share it so friends can find your game.</li><li><b>Player code</b> (15): given to you when you join. Enter it on any device to get back to your country. Keep it private, because anyone with it can play as you.</li><li><b>Master code</b> (20): given to the host who creates the lobby. It unlocks the host controls and the host view.</li></ul>'+
-  '<h3>Start</h3><p>Every country begins on a random square of the 25 × 25 map with <b>3 stability</b>, <b>1 action point (AP)</b> and a <b>reach of 2</b>. Columns are lettered A to Y and rows are numbered 1 to 25.</p>'+
-  '<h3>Time</h3><ul><li>At <b>8:00 pm '+ab+'</b> every day, each country still in play automatically gains <b>+1 AP</b>. Unused AP carry over with no cap.</li><li>AP can only be spent in the <b>action window, 8:00 to 10:15 pm '+ab+'</b>. Outside it the map is frozen.</li></ul>'+
+  '<h3>Start</h3><p>Every country begins on a random square of the '+SIZE+' × '+SIZE+' map with <b>3 stability</b>, <b>1 action point (AP)</b> and a <b>reach of 2</b>. Columns are lettered A to '+colL(SIZE-1)+' and rows are numbered 1 to '+SIZE+'.</p>'+
+  '<h3>Time</h3><ul><li>At <b>'+fmtClock(AP_MIN)+' '+ab+'</b> every day, each country still in play automatically gains <b>+1 AP</b>. Unused AP carry over with no cap.</li><li>AP can only be spent in the <b>action window, '+fmtClock(AP_MIN)+' to '+fmtClock(WIN_END)+' '+ab+'</b>. Outside it the map is frozen.</li></ul>'+
   '<h3>Orders</h3><table><tr><th>Move (1 AP)</th><td>Step one square in any of 8 directions onto an empty square.</td></tr>'+
-  '<tr><th>Sanction (1 AP)</th><td>Apply pressure to any country within your reach. It loses 1 stability. There is no luck involved. At 0 stability it collapses and its remaining AP pass to you.</td></tr>'+
+  '<tr><th>Sanction (1 AP)</th><td>Apply pressure to any country within your reach. It loses 1 stability. There is no luck involved. At 0 stability it collapses'+(LOOT?' and its remaining AP pass to you.':'. Its remaining AP are lost.')+'</td></tr>'+
   '<tr><th>Send aid (1 AP)</th><td>Give 1 of your AP to a country within reach. It costs you that AP. This is how alliances are made.</td></tr>'+
   '<tr><th>Extend reach ('+EXTEND_COST+' AP)</th><td>Permanently add +1 to your reach.</td></tr></table>'+
   '<p style="margin-top:6px">Reach counts squares in a square shape, diagonals included. A reach of 2 covers any square up to 2 away in every direction.</p>'+
   '<h3>Fog of war</h3><div class="see"><div><b>Everyone sees</b>Where every country is, every move, which country imposes a final sanction, and which country collapses. These all appear in the log.</div><div><b>Only you see</b>Your own stability, AP, reach and orders. A sanction that does not collapse a country, aid and reach upgrades are shown only to the countries involved.</div></div>'+
   '<p>The log marks private notes with an <b>Only you</b> tag. Hidden numbers are kept on the server and are never sent to your browser, so work out your rivals from how they behave.</p>'+
-  '<h3>The council</h3><p>Countries that collapse stay in the game. Each day they can vote for one country still in play. At 8:00 pm the country with the most votes gets an extra +1 AP. A tie gives nobody the point, and votes are secret.</p></div>';
+  '<h3>The council</h3><p>Countries that collapse stay in the game. Each day they can vote for one country still in play. At '+fmtClock(AP_MIN)+' the country with the most votes gets an extra +1 AP. A tie gives nobody the point, and votes are secret.</p></div>';
 }
 
 function tabsFor(me){
@@ -393,7 +398,7 @@ function landingHTML(){
     (codeErr?'<div class="notice bad" role="alert">'+esc(codeErr)+'</div>':'')+'</form>';
   if(keys.length){h+='<div><h3>On this device</h3><ul class="list">';keys.forEach(function(k){h+='<li><div><b class="mono">'+esc(k)+'</b><div class="meta">'+(saved[k].m?'Host':'')+(saved[k].m&&saved[k].p?' and ':'')+(saved[k].p?'Player':'')+'</div></div><button class="btn small" data-act="resume" data-v="'+esc(k)+'" data-fid="resume-'+esc(k)+'">Open</button></li>'});h+='</ul></div>'}
   h+='<div class="hr">or</div><div class="stack"><div><h3>Start a new game</h3><p class="private-note">You get a lobby code to share and a master code that makes you the host.</p></div>'+
-    '<label for="tzNew" style="font-size:14px">Game time zone. Action points arrive at 8:00 pm here.</label><select id="tzNew" data-fid="tzNew">'+opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===tz?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'+
+    '<label for="tzNew" style="font-size:14px">Game time zone. Action points arrive at '+fmtClock(AP_MIN)+' here.</label><select id="tzNew" data-fid="tzNew">'+opts.map(function(o){return '<option value="'+esc(o[0])+'"'+(o[0]===tz?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'+
     '<div class="row"><button class="btn primary" data-act="create" data-fid="create" '+(busy?'disabled':'')+'>Create a lobby</button></div>'+
     (createErr?'<div class="notice bad" role="alert">'+esc(createErr)+'</div>':'')+'</div></div>';
   return h+'<div class="panel">'+rulesHTML()+'</div>';
@@ -512,6 +517,7 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden&&ses
 /* ---------- boot ---------- */
 render();
 setInterval(tick,1000);
+fetch('/api/config',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){if(!session&&j&&j.cfg){setCfg(j.cfg);render()}}).catch(function(){});
 var last=lsGet('alliances:last');
 if(last&&/^[A-Z0-9]{5}$/.test(last))openLobby(last);
 })();

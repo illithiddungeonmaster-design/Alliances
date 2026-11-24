@@ -7,4 +7,4 @@ pages_build_output_dir = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "alliances"
-database_id = "PASTE-YOUR-DATABASE-ID-HERE"
+database_id = "f4d3b7b6-603a-4a16-90cb-b0e78c0fa422"

@@ -1,6 +1,6 @@
 # Alliances on Cloudflare Pages
 
-A turn-based map game on a 25 x 25 grid. Every player is a country with a random flag. Be the last country standing.
+A turn-based map game on a 20 x 20 grid. Every player is a country with a random flag. Be the last country standing.
 Stability, action points and reach are hidden from everyone else.
 
 This version runs entirely on Cloudflare: the page is static, the game API is a Pages Function, and game state lives in a D1 database.
@@ -57,9 +57,9 @@ Then open the address Wrangler prints.
   Entering that code on any device returns the player to their country.
 - The host (master code) starts the game, sees every hidden number in the Host tab, can issue a new code to a player who lost theirs, can download the game data and can reset the lobby.
 - **Rules:** every country starts with 3 stability, 1 action point (AP) and a reach of 2.
-  At 8:00 pm in the game's time zone each country still in play gets +1 AP. AP can be spent from 8:00 to 10:15 pm.
+  At 6:00 pm in the game's time zone each country still in play gets +1 AP. AP can be spent from 6:00 to 8:15 pm.
   Move (1 AP), sanction a country in reach to remove 1 stability (1 AP), send 1 AP of aid to a country in reach (1 AP), or extend reach by 1 (2 AP).
-  A country at 0 stability collapses and its AP pass to whoever delivered the final sanction.
+  A country at 0 stability collapses. Its AP are not passed to anyone.
   Collapsed countries vote daily on who receives a bonus AP. The full rules are in the app under "How to play".
 
 ## Fog of war
@@ -78,7 +78,7 @@ The page polls for updates, and it slows down whenever nothing can change:
 | Situation | Poll interval |
 | --- | --- |
 | Lobby | 5 seconds |
-| Game running, action window open (8:00 to 10:15 pm) | 3 seconds |
+| Game running, action window open (6:00 to 8:15 pm) | 3 seconds |
 | Game running, window closed | 30 seconds |
 | Game over | 60 seconds |
 | Browser tab in the background | 3x slower, at least 30 seconds |
@@ -92,8 +92,40 @@ Pressing Refresh checks for changes immediately.
 - 30 lobby creations per hour per address, 60 wrong codes per 10 minutes per address.
 - Lobbies that have not been touched for 60 days are deleted when someone creates a new lobby.
 - Simultaneous orders are safe. Each update is a compare-and-swap on the lobby's version, and a conflicting request retries automatically.
-- Daily AP are applied the first time anyone opens the lobby after 8:00 pm, using the time stored on the server, so no scheduled job is needed.
+- Daily AP are applied the first time anyone opens the lobby after 6:00 pm, using the time stored on the server, so no scheduled job is needed.
 - Security headers and a strict Content-Security-Policy are set in `public/_headers`.
+
+## Where the rules live
+
+All rule numbers are in one block at the top of `src/engine.js`:
+
+```js
+export const DEFAULT_CFG = { size: 20, apAt: 18 * 60, winEnd: 20 * 60 + 15, loot: false };
+export const LEGACY_CFG  = { size: 25, apAt: 20 * 60, winEnd: 22 * 60 + 15, loot: true };
+```
+
+`apAt` is the minute of the day when AP are granted, `winEnd` is when orders close, `loot` is whether a collapsed country's AP go to its killer.
+The browser reads these from the server (`GET /api/config`), so the page text, the map and the schedule always match.
+
+**Each lobby stores a copy of its settings when it is created.** Deploying new defaults changes only lobbies created afterwards.
+Games already in progress keep the rules their players agreed to, and lobbies created by older versions (which have no stored settings)
+are treated as `LEGACY_CFG`. To move a running lobby to the new rules, the host can press "Reset to an empty lobby" (this erases the game) or you can create a new lobby.
+
+## Updating a site that is already live
+
+No database migration is needed. The `lobbies` table is unchanged.
+
+1. **Back up the data.** `npx wrangler d1 export alliances --remote --output backup-$(date +%F).sql`
+   (D1 Time Travel also keeps 30 days of point-in-time history: `npx wrangler d1 time-travel info alliances`.)
+2. **Rehearse locally.** Replace the files, then `npm run db:local` and `npm run dev`. Optionally load the backup into the local database with
+   `npx wrangler d1 execute alliances --local --file backup-YYYY-MM-DD.sql` and open one of your own lobby codes to confirm it still shows 25 x 25 and 8 pm.
+   Create a new lobby and confirm it shows 20 x 20 and 6 pm.
+3. **Deploy.** `npm run deploy` (or push to GitHub if the project is connected). Pages keeps every previous deployment.
+4. **Check.** Open the live site, create a test lobby, check the schedule text and the map. Open an existing lobby and confirm it did not change.
+5. **Roll back if needed.** In the Cloudflare dashboard open Workers & Pages, your project, Deployments, choose the previous deployment and select Rollback.
+   Lobbies created while the new version was live will then be played under the old rules (the old code ignores their stored settings), so after a rollback use Time Travel or ask those players to start a new lobby.
+   To restore data, use Time Travel: `npx wrangler d1 time-travel restore alliances --timestamp=<time before the deploy>`.
+6. Ask players to refresh the page once so they get the new `app.js`. It is now served with `no-cache`, so later updates apply on the next visit.
 
 ## Upgrading later
 
